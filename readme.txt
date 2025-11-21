@@ -1,3 +1,3 @@
 - tweak rip.sh and cvt.py (ep range and novel id)
-- run rip.sh
-- run cvt.py
+- run rip.sh (calls wget)
+- run cvt.py (a mini "state machine" based html parser, also renames file based on title of each ep)
