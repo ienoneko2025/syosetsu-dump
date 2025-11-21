@@ -1,0 +1,3 @@
+- tweak rip.sh and cvt.py (ep range and novel id)
+- run rip.sh
+- run cvt.py
