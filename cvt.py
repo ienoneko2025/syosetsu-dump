@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 
 #
-# convert ハーメルン html format into plain text file
+# convert 小説家になろう html format into plain text file
+#
+# this script is forked from the extractor code for ハーメルン
 #
 
 import os
@@ -10,13 +12,14 @@ import sys
 import typing
 import dataclasses
 
-START_SIG='<div id="honbun">'  #本文
-EP_TITLE_SIG_TEMPLATE='<a href=./%d.html'
+START_SIG='<div class="js-novel-text p-novel__text">'
+EP_TITLE_SIG_TEMPLATE='<a href="/%s/%d/"'
 
 START_EP=1
-END_EP=11
+END_EP=25
+NOVEL_ID='n2165ie'
 
-DEBUG=True
+DEBUG=False
 
 @dataclasses.dataclass
 class Tag:
@@ -74,30 +77,53 @@ def construct_tag(s:str) -> tuple[Tag, int]:
         sys.exit(1)
       need_tag_start=False
       need_tag_kind=True
-      #debug('opening bracket')
     else:
       if need_tag_kind:
         try:
-          c=s[cursor]
-          cursor+=1
+          c=s[cursor]  # peek
         except IndexError:
-          print('<EEE>: [dropout]: want closing bracket but early EOF')
+          print('<EEE>: [dropout]: want closing bracket or terminal tag end but early EOF')
           sys.exit(1)
+        is_tag_kind_done=is_terminal_tag=False
         if c== '>':
+          cursor+=1
+          is_tag_kind_done=True
+        else:
+          subs=s[cursor:]  # peek
+          if subs.startswith('/>'):
+            # a terminal tag closes right after its tag kind
+            is_tag_kind_done=is_terminal_tag=True
+            cursor+=2
+        if is_tag_kind_done:
           if len(tag_kind_buff) == 0:
             print('<EEE>: [dropout]: empty tag kind')
             sys.exit(1)
           tag_kind=''.join(tag_kind_buff)
           need_tag_kind=False
-          need_tag_close=True
+          if is_terminal_tag:
+            for x in (
+              'br',
+            ):
+              if tag_kind == x:
+                break
+            else:
+              print(f'<EEE>: [dropout]: terminal tag syntax but tag kind {tag_kind!r} is not allowed')
+              sys.exit(1)
+            # terminal tag dont have any child or content, so its now done and we can just return
+            return Tag(tag_kind, []), cursor
+          else:
+            need_tag_close=True
         elif tag_kind_now_garbage:
-          pass  # do nothing, ignore these chars
+          cursor+=1
+          # and do nothing, ignore these chars
         else:
           if c == ' ':
             # ignore the properties, for example <div someproperty="value">
             tag_kind_now_garbage=True
+            cursor+=1
           elif c in 'abdiprtuvy':  # allowed chars
             tag_kind_buff.append(c)
+            cursor+=1
           else:
             print(f'<EEE>: [dropout]: (internal bug): dont know how to deal with char {c!r} living inside tag kind')
             sys.exit(1)
@@ -122,7 +148,6 @@ def construct_tag(s:str) -> tuple[Tag, int]:
           if c == '<':
             # this means an embedded tag inside the current text
             chk_commit_text_child(childs,text_child_buff)  # be sure to do before making new child
-            #debug('try to start a new child tag')
             res_tag, how_long = construct_tag(s[cursor:])
             cursor+=how_long
             childs.append(res_tag)
@@ -139,6 +164,9 @@ def construct_tag(s:str) -> tuple[Tag, int]:
             else:
               print('<EEE>: [dropout]: missing impl for HTML escaping')
               sys.exit(1)
+          elif c in '\n':
+            # ignored chars
+            cursor += 1
           else:
             # otherwise its considered inner text inside this tag
 
@@ -148,13 +176,13 @@ def construct_tag(s:str) -> tuple[Tag, int]:
             if c in ' \u3000': text_child_buff.append(c)
 
             # 句読点・括弧など
-            elif c in '、。…‥！!？「」『』()（）': text_child_buff.append(c)
+            elif c in '、。…‥！!？「」『』()（）《》［］': text_child_buff.append(c)
 
             # 引用符
             elif c in '“”〝〟＂': text_child_buff.append(c)
 
             # misc
-            elif c in '％～〜': text_child_buff.append(c)
+            elif c in '％～〜＊': text_child_buff.append(c)
 
             # 長音符
             elif c == 'ー': text_child_buff.append(c)
@@ -163,7 +191,10 @@ def construct_tag(s:str) -> tuple[Tag, int]:
             elif c == '々': text_child_buff.append(c)
 
             # ダッシュ(?)
-            elif c in '─': text_child_buff.append(c)
+            elif c in '─—―': text_child_buff.append(c)
+
+            # 縦棒
+            elif c in '｜': text_child_buff.append(c)
 
             # ハイフン
             elif c in '-': text_child_buff.append(c)
@@ -205,6 +236,9 @@ def construct_tag(s:str) -> tuple[Tag, int]:
             # ハートマーク
             elif c in '♥♡': text_child_buff.append(c)
 
+            # 音符
+            elif c in '♪': text_child_buff.append(c)
+
             # 中点
             elif c in '・': text_child_buff.append(c)
 
@@ -227,8 +261,8 @@ def construct_tag(s:str) -> tuple[Tag, int]:
 
 def render_ruby(ruby_tag:Tag,buff):
   for child in ruby_tag.childs:
-    # there exist two kind of ruby, use of rb is deprecated
-    # for completeness here i impled the non-deprecated way, but ハーメルン only uses the <rb> way
+    # there exist two kind of ruby, one of them uses <rb> which is deprecated
+    # the code that handles <rb> below is for completeness here only, note that 小説家になろう dont use <rb>
     if isinstance(child, str):
       buff.append(child)
     else:
@@ -262,11 +296,18 @@ def parse(s:str) -> str:
     for p_child in child.childs:
       if isinstance(p_child, str):
         buff.append(p_child)
-      elif isinstance(p_child, Tag) and p_child.kind=='ruby':
-        render_ruby(p_child,buff)
       else:
-        print(f'<EEE>: [dropout]: only support text and ruby node inside p, missing impl for {type(p_child)!r}')
-        sys.exit(1)
+        assert isinstance(p_child, Tag)
+        if p_child.kind=='ruby':
+          render_ruby(p_child,buff)
+        elif p_child.kind=='br':
+          if len(p_child.childs) != 0:
+            print('<EEE>: [dropout]: "br" tag is terminal and shouldnt have children')
+            sys.exit(1)
+          buff.append('\n')
+        else:
+          print(f'<EEE>: [dropout]: only support text node, "br" and ruby tags inside <p>, missing impl for {p_child.kind!r}')
+          sys.exit(1)
     # add a new line for every "p" (paragraph) tag
     buff.append('\n')
 
@@ -285,7 +326,7 @@ def handle(raw:str, i:int,out_name:str):
 def rename_main(index_html:str):
   titles=[]
   for i in range(START_EP, END_EP + 1):
-    sig = EP_TITLE_SIG_TEMPLATE % i
+    sig = EP_TITLE_SIG_TEMPLATE % (NOVEL_ID, i)
     where_a_tag=index_html.find(sig)
     if where_a_tag==-1:
       print(f'<EEE>: [dropout]: cant find episode title signature for Ep. {i}')
@@ -303,9 +344,9 @@ def rename_main(index_html:str):
 
   for title, i in zip(titles, range(START_EP, END_EP + 1)):
     old_fn=f'outputs/{i}.txt'
-    if title.startswith(f'{i}話') and title[len(str(i)) + 1].isspace():
-      # the title already is formatted already and followed by a space,
-      # so dont add it again on our side
+    if title.startswith(f'第{i}話') and title[len(str(i)) + 2].isspace():
+      # the title is already formatted and a space is present after the ep. num,
+      # dont add it again on our side
       new_fn=f'outputs/{title}.txt'
     else:
       new_fn=f'outputs/{i} {title}.txt'
