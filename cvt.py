@@ -21,10 +21,10 @@ NOVEL_ID='n2165ie'
 
 DEBUG=False
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class Tag:
   kind: str
-  childs: list[typing.Union[typing.Self, str]]
+  childs: tuple[typing.Union[typing.Self, str], ...]
 
 def debug(s:str):
   if DEBUG:
@@ -110,7 +110,7 @@ def construct_tag(s:str) -> tuple[Tag, int]:
               print(f'<EEE>: [dropout]: terminal tag syntax but tag kind {tag_kind!r} is not allowed')
               sys.exit(1)
             # terminal tag dont have any child or content, so its now done and we can just return
-            return Tag(tag_kind, []), cursor
+            return Tag(tag_kind, ()), cursor
           else:
             need_tag_close=True
         elif tag_kind_now_garbage:
@@ -143,7 +143,7 @@ def construct_tag(s:str) -> tuple[Tag, int]:
 
             chk_commit_text_child(childs,text_child_buff)  # chk for any dirty buffer
 
-            return Tag(tag_kind, childs), cursor
+            return Tag(tag_kind, tuple(childs)), cursor
           c=s[cursor]  # peek
           if c == '<':
             # this means an embedded tag inside the current text
@@ -259,7 +259,12 @@ def construct_tag(s:str) -> tuple[Tag, int]:
           print('unreachable')
           sys.exit(1)
 
+g_known_ruby_tags=set()
+
 def render_ruby(ruby_tag:Tag,buff):
+  if ruby_tag not in g_known_ruby_tags:
+    g_known_ruby_tags.add(ruby_tag)
+    print('<iii>: [dropout]: handling ruby tag:', ruby_tag)
   for child in ruby_tag.childs:
     # there exist two kind of ruby, one of them uses <rb> which is deprecated
     # the code that handles <rb> below is for completeness here only, note that 小説家になろう dont use <rb>
@@ -304,7 +309,12 @@ def parse(s:str) -> str:
           if len(p_child.childs) != 0:
             print('<EEE>: [dropout]: "br" tag is terminal and shouldnt have children')
             sys.exit(1)
-          buff.append('\n')
+          if len(child.childs) == 1:
+            pass
+            # dont insert a new line here,
+            # <br> has no effect if its the only elem inside p
+          else:
+            buff.append('\n')
         else:
           print(f'<EEE>: [dropout]: only support text node, "br" and ruby tags inside <p>, missing impl for {p_child.kind!r}')
           sys.exit(1)
